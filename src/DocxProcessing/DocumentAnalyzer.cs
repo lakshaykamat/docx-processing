@@ -18,6 +18,23 @@ public sealed class DocumentAnalyzer
     XElement? defaults;
     int nodeId;
     static string? Val(XElement? e) => (string?)e?.Attribute(W + "val");
+    static int StyleTypeOrder(string type) => type switch
+    {
+        "paragraph" => 0,
+        "character" => 1,
+        "table" => 2,
+        "numbering" => 3,
+        _ => 4
+    };
+    static string StyleTypeLabel(string type) => type switch
+    {
+        "paragraph" => "Paragraph styles",
+        "character" => "Character styles",
+        "table" => "Table styles",
+        "numbering" => "Numbering styles",
+        "unspecified" => "Other styles",
+        _ => string.Concat(char.ToUpperInvariant(type[0]), type[1..], " styles")
+    };
     static string Text(XElement e) => string.Concat(e.Descendants().Where(x => x.Name == W + "t" || x.Name == W + "delText" || x.Name.LocalName == "t" && x.Name.NamespaceName.Contains("math")).Select(x => x.Value));
     static string Location(string part, XElement e) => "/" + part + ":/" + string.Join("/", e.AncestorsAndSelf().Reverse().Select(x => x.Name.LocalName + "[" + (x.ElementsBeforeSelf(x.Name).Count() + 1) + "]"));
     void Warn(string message, string location) => result.StructuralWarnings.Add(new("Warning", message, location));
@@ -99,6 +116,26 @@ public sealed class DocumentAnalyzer
             }
             else if (stack.Count > 0) stack.Peek().Children.Add(node); else result.Outline.Add(node);
         }
+        result.StyleGroups = result.Styles
+            .GroupBy(style => string.IsNullOrWhiteSpace(style.Type) ? "unspecified" : style.Type.Trim().ToLowerInvariant())
+            .OrderBy(group => StyleTypeOrder(group.Key))
+            .ThenBy(group => group.Key, StringComparer.Ordinal)
+            .Select(group => new StyleGroupInfo
+            {
+                Type = group.Key,
+                Label = StyleTypeLabel(group.Key),
+                Styles = group.OrderBy(style => style.Name, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(style => style.Id, StringComparer.Ordinal)
+                    .Select(style => new StyleSummaryInfo
+                    {
+                        Id = style.Id,
+                        Name = style.Name,
+                        IsDefault = style.IsDefault,
+                        Usage = style.Usage
+                    })
+                    .ToList()
+            })
+            .ToList();
         int Count(string name) => content.Sum(x => x.Value.Descendants(W + name).Count());
         result.Counts = new() { ["Paragraphs"] = Count("p"), ["Styles defined"] = styles.Count, ["Styles used"] = result.Styles.Count(x => x.Usage > 0), ["Tables"] = Count("tbl"), ["Images"] = result.Elements.Count(x => x.Type == "Image"), ["Comments"] = Count("comment"), ["Bookmarks"] = bookmarks.Count, ["Tracked changes"] = result.Elements.Count(x => x.Type == "Tracked change") };
         // Validation uses the SDK in read-only mode. Structural inspection remains available

@@ -27,6 +27,7 @@
           <div class="view-tabs" role="tablist" aria-label="Document tree views">
             <button id="tab-content" class="view-tab" type="button" role="tab" aria-selected="true" aria-controls="content-view">Content &amp; styles</button>
             <button id="tab-headings" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="heading-view">Heading order</button>
+            <button id="tab-all-styles" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="all-styles-view">All styles</button>
           </div>
           <div id="content-view" role="tabpanel" aria-labelledby="tab-content">
             <p class="panel-help">Paragraph style is shown on each item. Expand character styles to see which text uses them.</p>
@@ -37,6 +38,10 @@
           <div id="heading-view" role="tabpanel" aria-labelledby="tab-headings" hidden>
             <p class="panel-help">Heading text only, in document order. Numbers follow heading levels.</p>
             <ol id="heading-order" class="heading-order"></ol>
+          </div>
+          <div id="all-styles-view" role="tabpanel" aria-labelledby="tab-all-styles" hidden>
+            <p class="panel-help">All styles defined in this document, grouped by type and sorted by name.</p>
+            <div id="all-styles-list" class="style-list"></div>
           </div>
         </section>
         <section class="panel preview-panel" aria-labelledby="preview-title">

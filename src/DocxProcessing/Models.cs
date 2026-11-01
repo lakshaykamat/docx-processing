@@ -31,6 +31,19 @@ public sealed class StyleInfo
     public List<string> Chain { get; set; } = [];
     public string Xml { get; set; } = "";
 }
+public sealed class StyleSummaryInfo
+{
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+    public bool IsDefault { get; set; }
+    public int Usage { get; set; }
+}
+public sealed class StyleGroupInfo
+{
+    public string Type { get; set; } = "";
+    public string Label { get; set; } = "";
+    public List<StyleSummaryInfo> Styles { get; set; } = [];
+}
 public record ElementInfo(string Type, string Location, string Text, Dictionary<string, string> Details);
 public sealed class AnalysisResult
 {
@@ -39,6 +52,7 @@ public sealed class AnalysisResult
     public Dictionary<string, int> Counts { get; set; } = [];
     public List<DocumentNode> Outline { get; set; } = [];
     public List<StyleInfo> Styles { get; set; } = [];
+    public List<StyleGroupInfo> StyleGroups { get; set; } = [];
     public List<ElementInfo> Elements { get; set; } = [];
     public List<Issue> SchemaErrors { get; set; } = [];
     public List<Issue> StructuralWarnings { get; set; } = [];

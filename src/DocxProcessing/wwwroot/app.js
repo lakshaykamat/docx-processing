@@ -228,15 +228,49 @@ function drawHeadingOrder(host) {
   return headings.length;
 }
 
+function drawAllStyles(host) {
+  host.replaceChildren();
+  const groups = report?.styleGroups || [];
+  if (!groups.length) {
+    host.append(el("p", "No styles were defined in this document.", "empty-state"));
+    return;
+  }
+
+  groups.forEach(group => {
+    const section = el("section", null, "style-group");
+    const heading = el("div", null, "style-group-heading");
+    heading.append(el("h3", group.label));
+    heading.append(el("span", String(group.styles.length), "style-count"));
+    const list = el("ul", null, "style-tree");
+    group.styles.forEach(style => {
+      const item = el("li", null, "style-tree-item");
+      const row = el("div", null, "style-node");
+      row.append(el("span", style.name || style.id, "style-name"));
+      const meta = el("span", null, "style-meta");
+      meta.append(el("code", style.id, "style-id"));
+      meta.append(el("span", style.usage > 0 ? "Used " + style.usage : "Unused", "style-usage"));
+      if (style.isDefault) meta.append(el("span", "Default", "style-default"));
+      row.append(meta);
+      item.append(row);
+      list.append(item);
+    });
+    section.append(heading, list);
+    host.append(section);
+  });
+}
 function setTreeView(view) {
   activeTreeView = view;
   const isHeadings = view === 'headings';
-  $('#tab-content').setAttribute('aria-selected', String(!isHeadings));
+  const isAllStyles = view === 'styles';
+  $('#tab-content').setAttribute('aria-selected', String(view === 'content'));
   $('#tab-headings').setAttribute('aria-selected', String(isHeadings));
-  $('#content-view').hidden = isHeadings;
+  $('#tab-all-styles').setAttribute('aria-selected', String(isAllStyles));
+  $('#content-view').hidden = view !== 'content';
   $('#heading-view').hidden = !isHeadings;
-  if (isHeadings) $('#style-count').textContent = `${drawHeadingOrder($('#heading-order'))} headings`;
-  else $('#style-count').textContent = `${contentStyleCount} used styles`;
+  $('#all-styles-view').hidden = !isAllStyles;
+  if (isHeadings) $('#style-count').textContent = drawHeadingOrder($('#heading-order')) + ' headings';
+  else if (isAllStyles) $('#style-count').textContent = (report?.counts?.['Styles defined'] || 0) + ' styles';
+  else $('#style-count').textContent = contentStyleCount + ' used styles';
 }
 
 function formattingMap(values = []) {
@@ -393,12 +427,17 @@ $('#expand-all').addEventListener('click', () => document.querySelectorAll('#sty
 $('#collapse-all').addEventListener('click', () => document.querySelectorAll('#style-tree details').forEach(item => { item.open = false; }));
 $('#tab-content').addEventListener('click', () => setTreeView('content'));
 $('#tab-headings').addEventListener('click', () => setTreeView('headings'));
+$('#tab-all-styles').addEventListener('click', () => setTreeView('styles'));
 document.querySelector('[role="tablist"]').addEventListener('keydown', event => {
   if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+  const tabs = [...event.currentTarget.querySelectorAll('[role="tab"]')];
+  const current = tabs.indexOf(event.target.closest('[role="tab"]'));
+  if (current < 0) return;
   event.preventDefault();
-  const next = event.currentTarget.querySelector('[aria-selected="true"]') === $('#tab-content') ? 'headings' : 'content';
-  (next === 'content' ? $('#tab-content') : $('#tab-headings')).focus();
-  setTreeView(next);
+  const step = event.key === 'ArrowRight' ? 1 : -1;
+  const nextTab = tabs[(current + step + tabs.length) % tabs.length];
+  nextTab.focus();
+  setTreeView(nextTab.id === 'tab-content' ? 'content' : nextTab.id === 'tab-headings' ? 'headings' : 'styles');
 });
 
 $('#evaluate-style').addEventListener('click', async () => {
@@ -450,13 +489,14 @@ $('#upload').addEventListener('submit', async event => {
     $('#filename').textContent = data.filename;
     $('#filesize').textContent = `${(data.size / 1024).toFixed(1)} KB`;
     drawStyleTree($('#style-tree'));
+    drawAllStyles($('#all-styles-list'));
     setTreeView('content');
     renderPreview($('#document-preview'));
     $('#evaluation-panel').hidden = false;
     $('#evaluation-results').hidden = true;
     $('#evaluation-status').textContent = '';
     $('#report').hidden = false;
-    status.textContent = 'Document opened. The tree follows its content hierarchy; unused styles are hidden.';
+    status.textContent = 'Document opened. All defined styles are listed in the All styles tab.';
   } catch (error) {
     status.textContent = error.message;
     status.className = 'error';
