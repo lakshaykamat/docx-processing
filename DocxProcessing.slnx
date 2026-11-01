@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/DocxProcessing/DocxProcessing.csproj" />
+  <Project Path="tests/DocxProcessing.Tests/DocxProcessing.Tests.csproj" />
+</Solution>
