@@ -116,6 +116,7 @@ public sealed class DocumentAnalyzer
             }
             else if (stack.Count > 0) stack.Peek().Children.Add(node); else result.Outline.Add(node);
         }
+        AssignHeadingNumbers(result.Outline);
         result.StyleGroups = result.Styles
             .GroupBy(style => string.IsNullOrWhiteSpace(style.Type) ? "unspecified" : style.Type.Trim().ToLowerInvariant())
             .OrderBy(group => StyleTypeOrder(group.Key))
@@ -136,6 +137,9 @@ public sealed class DocumentAnalyzer
                     .ToList()
             })
             .ToList();
+        result.ParagraphStyleCount = result.Styles.Count(style => style.Type == "paragraph");
+        result.TableStyleCount = result.Styles.Count(style => style.Type == "table");
+        result.MainBodyStyleCount = CountMainBodyStyles(result.Outline);
         int Count(string name) => content.Sum(x => x.Value.Descendants(W + name).Count());
         result.Counts = new() { ["Paragraphs"] = Count("p"), ["Styles defined"] = styles.Count, ["Styles used"] = result.Styles.Count(x => x.Usage > 0), ["Tables"] = Count("tbl"), ["Images"] = result.Elements.Count(x => x.Type == "Image"), ["Comments"] = Count("comment"), ["Bookmarks"] = bookmarks.Count, ["Tracked changes"] = result.Elements.Count(x => x.Type == "Tracked change") };
         // Validation uses the SDK in read-only mode. Structural inspection remains available
@@ -160,6 +164,52 @@ public sealed class DocumentAnalyzer
             "Inspection limits: 20 MB upload, 100 MB expanded package, 5,000 entries, 30 million XML characters per part. No uploads are stored."
         ]);
         return result;
+    }
+
+    static void AssignHeadingNumbers(IEnumerable<DocumentNode> nodes)
+    {
+        AssignHeadingNumbers(nodes, []);
+    }
+
+    static void AssignHeadingNumbers(IEnumerable<DocumentNode> nodes, List<int> counters)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.HeadingLevel is int level)
+            {
+                counters.RemoveRange(Math.Min(counters.Count, level), Math.Max(0, counters.Count - level));
+                while (counters.Count < level) counters.Add(0);
+                for (var index = 0; index < level - 1; index++)
+                    if (counters[index] == 0) counters[index] = 1;
+                counters[level - 1]++;
+                node.HeadingNumber = string.Join(".", counters);
+            }
+
+            AssignHeadingNumbers(node.Children, counters);
+        }
+    }
+
+    int CountMainBodyStyles(IEnumerable<DocumentNode> nodes)
+    {
+        var usedStyles = result.Styles
+            .Where(style => style.Usage > 0)
+            .Select(style => style.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        var visibleStyles = new HashSet<string>(StringComparer.Ordinal);
+
+        void Collect(IEnumerable<DocumentNode> currentNodes)
+        {
+            foreach (var node in currentNodes)
+            {
+                if (node.StyleId is not null && usedStyles.Contains(node.StyleId)) visibleStyles.Add(node.StyleId);
+                foreach (var run in node.Runs)
+                    if (run.StyleId is not null && usedStyles.Contains(run.StyleId)) visibleStyles.Add(run.StyleId);
+                Collect(node.Children);
+            }
+        }
+
+        Collect(nodes);
+        return visibleStyles.Count;
     }
 
     void UseStyle(string? id) { var style = result.Styles.FirstOrDefault(x => x.Id == id); if (style is not null) style.Usage++; }
@@ -228,6 +278,7 @@ public sealed class DocumentAnalyzer
         if (e.Name == W + "p")
         {
             var pr = e.Element(W + "pPr");
+            node.HasExplicitStyle = pr?.Element(W + "pStyle") is not null;
             node.StyleId = Val(pr?.Element(W + "pStyle")) ?? DefaultStyle("paragraph"); node.StyleName = StyleName(node.StyleId);
             node.Inheritance = Chain(node.StyleId);
             node.Formatting = Formatting(Layers(node.StyleId, "pPr", pr), false);
@@ -256,7 +307,7 @@ public sealed class DocumentAnalyzer
         }
         else
         {
-            if (e.Name == W + "tbl") { node.Type = "Table"; node.StyleId = Val(e.Element(W + "tblPr")?.Element(W + "tblStyle")) ?? DefaultStyle("table"); node.StyleName = StyleName(node.StyleId); node.Inheritance = Chain(node.StyleId); }
+            if (e.Name == W + "tbl") { node.Type = "Table"; node.HasExplicitStyle = e.Element(W + "tblPr")?.Element(W + "tblStyle") is not null; node.StyleId = Val(e.Element(W + "tblPr")?.Element(W + "tblStyle")) ?? DefaultStyle("table"); node.StyleName = StyleName(node.StyleId); node.Inheritance = Chain(node.StyleId); }
             foreach (var child in e.Elements().Where(x => !new[] { "tblPr", "tblGrid", "trPr", "tcPr" }.Contains(x.Name.LocalName)))
                 if (child.Name == W + "p" || child.Name == W + "tbl" || child.Descendants(W + "p").Any()) node.Children.Add(BuildNode(path, child));
         }

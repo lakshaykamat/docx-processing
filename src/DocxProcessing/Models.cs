@@ -11,7 +11,9 @@ public sealed class DocumentNode
     public string Location { get; set; } = "";
     public string? StyleId { get; set; }
     public string? StyleName { get; set; }
+    public bool HasExplicitStyle { get; set; }
     public int? HeadingLevel { get; set; }
+    public string? HeadingNumber { get; set; }
     public bool Inferred { get; set; }
     public List<string> Inheritance { get; set; } = [];
     public List<PropertyValue> Formatting { get; set; } = [];
@@ -50,6 +52,9 @@ public sealed class AnalysisResult
     public string Filename { get; set; } = "";
     public long Size { get; set; }
     public Dictionary<string, int> Counts { get; set; } = [];
+    public int ParagraphStyleCount { get; set; }
+    public int TableStyleCount { get; set; }
+    public int MainBodyStyleCount { get; set; }
     public List<DocumentNode> Outline { get; set; } = [];
     public List<StyleInfo> Styles { get; set; } = [];
     public List<StyleGroupInfo> StyleGroups { get; set; } = [];

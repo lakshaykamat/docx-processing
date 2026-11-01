@@ -7,5 +7,6 @@
   <ItemGroup><PackageReference Include="DocumentFormat.OpenXml" Version="3.5.1" /></ItemGroup>
   <ItemGroup>
     <None Update="Prompts\style-evaluation.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="Prompts\style-assignment.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

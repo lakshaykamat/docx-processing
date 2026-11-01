@@ -2,13 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>DOCX Processing</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DOCX Style Inspector</title>
   <link rel="stylesheet" href="/styles.css">
-  <script src="/app.js" defer></script>
+  <script type="module" src="/js/app.js"></script>
 </head>
 <body>
-  <header><div class="brand">DOCX <span>Style Inspector</span></div><span class="badge">READ ONLY</span></header>
+  <header>
+    <div class="brand">DOCX <span>Style Inspector</span></div>
+  </header>
+
   <main>
     <form id="upload" class="upload">
       <div class="file-choice">
@@ -19,45 +22,89 @@
       <button id="submit" type="submit">Open document</button>
     </form>
     <p id="status" role="status" aria-live="polite">Choose a document to see its styles and content.</p>
+
     <section id="report" hidden>
-      <div class="document-heading"><h1 id="filename"></h1><span id="filesize"></span></div>
+      <div class="document-heading">
+        <h1 id="filename"></h1>
+        <span id="filesize"></span>
+      </div>
+
       <div class="workspace">
         <section class="panel styles-panel" aria-labelledby="styles-title">
-          <div class="panel-heading"><div><p class="eyebrow">DOCUMENT NAVIGATION</p><h2 id="styles-title">Document structure</h2></div><span id="style-count" class="count"></span></div>
-          <div class="view-tabs" role="tablist" aria-label="Document tree views">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">DOCUMENT NAVIGATION</p>
+              <h2 id="styles-title">Document structure</h2>
+            </div>
+            <span id="style-count" class="count"></span>
+          </div>
+
+          <div class="view-tabs" role="tablist" aria-label="Document views">
             <button id="tab-content" class="view-tab" type="button" role="tab" aria-selected="true" aria-controls="content-view">Content &amp; styles</button>
             <button id="tab-headings" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="heading-view">Heading order</button>
             <button id="tab-all-styles" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="all-styles-view">All styles</button>
           </div>
+
           <div id="content-view" role="tabpanel" aria-labelledby="tab-content">
-            <p class="panel-help">Paragraph style is shown on each item. Expand character styles to see which text uses them.</p>
-            <input id="style-search" class="search" type="search" placeholder="Search content or style" aria-label="Search document content or styles">
-            <div class="tree-toolbar"><button id="expand-all" class="secondary" type="button">Expand all</button><button id="collapse-all" class="secondary" type="button">Collapse all</button></div>
+            <p class="panel-help">Styles appear on each item. Default labels identify styles inherited from Word. Expand character styles to see styled text.</p>
+            <input id="style-search" class="search" type="search" placeholder="Search content or styles" aria-label="Search document content or styles">
+            <div class="tree-toolbar">
+              <button id="expand-all" class="secondary" type="button">Expand all</button>
+              <button id="collapse-all" class="secondary" type="button">Collapse all</button>
+            </div>
             <div id="style-tree" class="style-list"></div>
           </div>
+
           <div id="heading-view" role="tabpanel" aria-labelledby="tab-headings" hidden>
-            <p class="panel-help">Heading text only, in document order. Numbers follow heading levels.</p>
+            <p class="panel-help">Headings in document order, numbered by level.</p>
             <ol id="heading-order" class="heading-order"></ol>
           </div>
+
           <div id="all-styles-view" role="tabpanel" aria-labelledby="tab-all-styles" hidden>
-            <p class="panel-help">All styles defined in this document, grouped by type and sorted by name.</p>
+            <p class="panel-help">Every style defined in the document, grouped by type.</p>
             <div id="all-styles-list" class="style-list"></div>
           </div>
         </section>
+
         <section class="panel preview-panel" aria-labelledby="preview-title">
-          <div class="panel-heading preview-heading"><div><p class="eyebrow">DOCUMENT</p><h2 id="preview-title">Preview</h2></div><span class="preview-note">Select an item in the tree to locate it here</span></div>
+          <div class="panel-heading preview-heading">
+            <div>
+              <p class="eyebrow">DOCUMENT</p>
+              <h2 id="preview-title">Preview</h2>
+            </div>
+            <span class="preview-note">Select an item to locate it here</span>
+          </div>
           <div id="document-preview" class="document-preview" aria-label="Document preview"></div>
         </section>
       </div>
+
+      <section id="style-adder-panel" class="evaluation-panel" aria-labelledby="style-adder-title" hidden>
+        <div class="evaluation-heading">
+          <div>
+            <p class="eyebrow">OPENAI STYLE ADDER</p>
+            <h2 id="style-adder-title">Add and fix styles</h2>
+          </div>
+          <button id="apply-style" type="button" disabled>Add/fix styles and download copy</button>
+        </div>
+        <p class="evaluation-disclosure">OpenAI checks each main-body text block against the document's styles. Text, context, and style names are sent to OpenAI and may use API quota. Changes download as a copy.</p>
+        <p id="style-adder-status" role="status" aria-live="polite"></p>
+      </section>
+
       <section id="evaluation-panel" class="evaluation-panel" aria-labelledby="evaluation-title" hidden>
         <div class="evaluation-heading">
-          <div><p class="eyebrow">OPENAI STYLE REVIEW</p><h2 id="evaluation-title">Do the styles fit the content?</h2></div>
-          <button id="evaluate-style" type="button">Evaluate styles with OpenAI</button>
+          <div>
+            <p class="eyebrow">OPENAI STYLE REVIEW</p>
+            <h2 id="evaluation-title">Do the styles fit the content?</h2>
+          </div>
+          <button id="evaluate-style" type="button">Evaluate styles</button>
         </div>
-        <p class="evaluation-disclosure">When you run this review, sampled main-body text and applied style names are sent to OpenAI. This may use your API quota or incur charges. The document itself is never changed.</p>
+        <p class="evaluation-disclosure">Sampled main-body text and applied style names are sent to OpenAI for review. This may use API quota. The document is not changed.</p>
         <p id="evaluation-status" role="status" aria-live="polite"></p>
         <div id="evaluation-results" hidden>
-          <div class="evaluation-summary"><span id="evaluation-badge" class="evaluation-badge"></span><p id="evaluation-summary-text"></p></div>
+          <div class="evaluation-summary">
+            <span id="evaluation-badge" class="evaluation-badge"></span>
+            <p id="evaluation-summary-text"></p>
+          </div>
           <p id="evaluation-coverage" class="evaluation-coverage"></p>
           <h3>Findings</h3>
           <ol id="evaluation-findings" class="evaluation-findings"></ol>
@@ -65,6 +112,7 @@
       </section>
     </section>
   </main>
-  <footer>DOCX Processing · Read-only document preview</footer>
+
+  <footer>DOCX Processing · Uploaded documents are inspected in memory; style changes download as a copy.</footer>
 </body>
 </html>

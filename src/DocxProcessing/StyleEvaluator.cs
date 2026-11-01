@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Xml.Linq;
 using Microsoft.AspNetCore.Hosting;
 
 namespace DocxProcessing;
@@ -29,12 +30,47 @@ public sealed class StyleEvaluationException(string message, int statusCode = 50
     public int StatusCode { get; } = statusCode;
 }
 
-internal sealed record EvaluationStyleOption(string Id, string Name, string Type);
+internal sealed record EvaluationStyleOption(
+    string Id,
+    string Name,
+    string Type,
+    string? BasedOn,
+    List<string> Inheritance,
+    bool IsDefault,
+    int Usage,
+    string Definition,
+    List<string> Examples);
+internal sealed record EvaluationHeading(int Level, string Text, string? StyleId);
+internal sealed record EvaluationTextSample(
+    string Type,
+    string Text,
+    string? StyleId,
+    bool HasExplicitStyle,
+    List<string> DirectFormatting);
+internal sealed record EvaluationDocumentContext(
+    int MainBodyItemCount,
+    int TotalHeadingCount,
+    List<EvaluationHeading> Headings,
+    List<EvaluationTextSample> TextSamples);
 internal sealed record EvaluationTableCellContext(int RowNumber, int CellNumber, int FirstCellNumber, List<string> RowCells, List<string> NearbyCellsAtSamePosition);
 internal sealed record EvaluationBlockContext(string? SectionHeading, EvaluationTableCellContext? TableCell);
 internal sealed record ContextualNode(DocumentNode Node, EvaluationBlockContext Context);
-internal sealed record EvaluationBlock(string NodeId, string Location, string Type, string Text, string AppliedStyle, string AppliedStyleType, EvaluationBlockContext Context);
-internal sealed record EvaluationInput(List<EvaluationStyleOption> Styles, List<EvaluationBlock> Items, string CoverageNote);
+internal sealed record EvaluationBlock(
+    string NodeId,
+    string Location,
+    string Type,
+    string Text,
+    string? AppliedStyleId,
+    string AppliedStyle,
+    string AppliedStyleType,
+    bool HasExplicitStyle,
+    List<string> DirectFormatting,
+    EvaluationBlockContext Context);
+internal sealed record EvaluationInput(
+    List<EvaluationStyleOption> Styles,
+    List<EvaluationBlock> Items,
+    string CoverageNote,
+    EvaluationDocumentContext Document);
 internal sealed record EvaluationPlan(List<EvaluationInput> Batches, int TotalBlocks);
 
 internal sealed class ModelEvaluation
@@ -51,52 +87,168 @@ internal sealed class ModelFinding
 
 internal static class StyleEvaluationInputBuilder
 {
-    const int MaxBlocksPerBatch = 40;
+    const int DefaultMaxBlocksPerBatch = 40;
+    public const int StyleAssignmentMaxBlocksPerBatch = 80;
     const int MaxJsonCharacters = 256_000;
     const int MaxTextCharacters = 600;
     const int MaxContextCells = 8;
     const int MaxContextCellCharacters = 100;
     const int MaxNearbyCellSamples = 3;
+    const int MaxExamplesPerStyle = 2;
+    const int MaxExampleCharacters = 180;
+    const int MaxHeadingsInContext = 100;
+    const int MaxDocumentTextSamples = 60;
+    const int MaxStylesWithExamples = 60;
     static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
-    public static EvaluationPlan Build(AnalysisResult analysis)
+    static readonly HashSet<string> DirectCueProperties = new(StringComparer.Ordinal)
     {
-        var styles = analysis.Styles
-            .Select(x => new EvaluationStyleOption(x.Id, x.Name, x.Type))
-            .ToList();
-        var stylesById = analysis.Styles.ToDictionary(x => x.Id, StringComparer.Ordinal);
-        var allBlocks = FlattenWithContext(analysis.Outline)
+        "Alignment", "Indent left", "Spacing before", "Spacing after",
+        "Font size", "Bold", "Italic", "Underline", "Color"
+    };
+
+    public static EvaluationPlan Build(AnalysisResult analysis, int maxBlocksPerBatch = DefaultMaxBlocksPerBatch)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxBlocksPerBatch);
+        var stylesById = analysis.Styles.ToDictionary(style => style.Id, StringComparer.Ordinal);
+        var contextualNodes = FlattenWithContext(analysis.Outline).ToList();
+        var allBlocks = contextualNodes
             .Where(x => x.Node.Type is "Heading" or "Title" or "Caption" or "Paragraph" or "Table")
             .Select(x => ToBlock(x, stylesById))
             .ToList();
         if (allBlocks.Count == 0)
             return new([], 0);
 
-        if (SerializedSize(styles, []) > MaxJsonCharacters)
-            throw new StyleEvaluationException("This document defines too many styles to include in one evaluation request.", 413);
+        var documentContext = BuildDocumentContext(contextualNodes, allBlocks.Count);
+        var stylesWithExamples = analysis.Styles
+            .Where(style => style.Usage > 0)
+            .OrderByDescending(style => style.Usage)
+            .Take(MaxStylesWithExamples)
+            .Select(style => style.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        var examplesByStyle = BuildStyleExamples(contextualNodes, stylesWithExamples);
+        var styles = analysis.Styles
+            .Select(style => new EvaluationStyleOption(
+                style.Id,
+                style.Name,
+                style.Type,
+                style.BasedOn,
+                style.Chain.Skip(1).ToList(),
+                style.IsDefault,
+                style.Usage,
+                DescribeStyle(style.Xml),
+                examplesByStyle.GetValueOrDefault(style.Id, [])))
+            .ToList();
+        if (SerializedSize(styles, [], documentContext) > MaxJsonCharacters)
+            throw new StyleEvaluationException("The document's style catalog and context are too large to include in one request.", 413);
 
         var batches = new List<List<EvaluationBlock>>();
         var current = new List<EvaluationBlock>();
         foreach (var block in allBlocks)
         {
-            var wouldExceedSize = current.Count > 0 && SerializedSize(styles, current.Append(block).ToList()) > MaxJsonCharacters;
-            if (current.Count >= MaxBlocksPerBatch || wouldExceedSize)
+            var wouldExceedSize = current.Count > 0 &&
+                SerializedSize(styles, current.Append(block).ToList(), documentContext) > MaxJsonCharacters;
+            if (current.Count >= maxBlocksPerBatch || wouldExceedSize)
             {
                 batches.Add(current);
                 current = [];
             }
 
             current.Add(block);
-            if (SerializedSize(styles, current) > MaxJsonCharacters)
-                throw new StyleEvaluationException("A style-review item leaves too little room for one evaluation request.", 413);
+            if (SerializedSize(styles, current, documentContext) > MaxJsonCharacters)
+                throw new StyleEvaluationException("A document item leaves too little room for one request.", 413);
         }
         if (current.Count > 0) batches.Add(current);
 
         var totalBatches = batches.Count;
         var inputs = batches
-            .Select((items, index) => new EvaluationInput(styles, items, $"Batch {index + 1} of {totalBatches}."))
+            .Select((items, index) => new EvaluationInput(
+                styles,
+                items,
+                $"Batch {index + 1} of {totalBatches}.",
+                documentContext))
             .ToList();
         return new(inputs, allBlocks.Count);
+    }
+
+    static EvaluationDocumentContext BuildDocumentContext(
+        List<ContextualNode> nodes,
+        int mainBodyItemCount)
+    {
+        var allHeadings = nodes
+            .Where(item => item.Node.Type == "Heading" && !string.IsNullOrWhiteSpace(item.Node.Text))
+            .ToList();
+        var headings = allHeadings
+            .Take(MaxHeadingsInContext)
+            .Select(item => new EvaluationHeading(
+                item.Node.HeadingLevel ?? 1,
+                Clip(item.Node.Text, MaxExampleCharacters),
+                item.Node.StyleId))
+            .ToList();
+        var textNodes = nodes
+            .Where(item => item.Node.Type is "Heading" or "Title" or "Caption" or "Paragraph")
+            .Where(item => !string.IsNullOrWhiteSpace(item.Node.Text))
+            .ToList();
+        var textSamples = SampleAcrossDocument(textNodes, MaxDocumentTextSamples)
+            .Select(item => new EvaluationTextSample(
+                item.Node.Type,
+                Clip(item.Node.Text, MaxExampleCharacters),
+                item.Node.StyleId,
+                item.Node.HasExplicitStyle,
+                DirectFormatting(item.Node)))
+            .ToList();
+
+        return new(mainBodyItemCount, allHeadings.Count, headings, textSamples);
+    }
+
+    static IEnumerable<ContextualNode> SampleAcrossDocument(List<ContextualNode> items, int limit)
+    {
+        if (items.Count <= limit) return items;
+        if (limit <= 1) return new[] { items[0] };
+
+        return Enumerable.Range(0, limit)
+            .Select(index => items[index * (items.Count - 1) / (limit - 1)]);
+    }
+
+    static Dictionary<string, List<string>> BuildStyleExamples(
+        List<ContextualNode> nodes,
+        HashSet<string> stylesWithExamples) => nodes
+        .Where(item => item.Node.StyleId is not null &&
+            stylesWithExamples.Contains(item.Node.StyleId) &&
+            !string.IsNullOrWhiteSpace(item.Node.Text))
+        .GroupBy(item => item.Node.StyleId!, StringComparer.Ordinal)
+        .ToDictionary(
+            group => group.Key,
+            group => group
+                .Select(item => Clip(item.Node.Text, MaxExampleCharacters))
+                .Distinct(StringComparer.Ordinal)
+                .Take(MaxExamplesPerStyle)
+                .ToList(),
+            StringComparer.Ordinal);
+
+    static string DescribeStyle(string xml)
+    {
+        try
+        {
+            var root = XElement.Parse(xml);
+            var details = root.Elements()
+                .Where(element => element.Name.LocalName is "pPr" or "rPr" or "tblPr")
+                .SelectMany(group => group.Descendants().Select(element =>
+                {
+                    var attributes = element.Attributes()
+                        .Where(attribute => !attribute.IsNamespaceDeclaration)
+                        .Select(attribute => $"{attribute.Name.LocalName}={attribute.Value}")
+                        .ToList();
+                    return attributes.Count == 0
+                        ? element.Name.LocalName
+                        : $"{element.Name.LocalName}({string.Join(",", attributes)})";
+                }))
+                .Take(24);
+            return Clip(string.Join("; ", details), 320);
+        }
+        catch (System.Xml.XmlException)
+        {
+            return "Style definition unavailable.";
+        }
     }
 
     static IEnumerable<ContextualNode> FlattenWithContext(
@@ -164,20 +316,70 @@ internal static class StyleEvaluationInputBuilder
     {
         var node = contextualNode.Node;
         var style = node.StyleName is null ? "(no named style)" : $"{node.StyleName} ({node.StyleId})";
-        var styleType = node.StyleId is not null && stylesById.TryGetValue(node.StyleId, out var info) ? info.Type : "unknown";
-        return new(node.Id, Clip(node.Location, 300), node.Type, Clip(node.Text, MaxTextCharacters), style, styleType, contextualNode.Context);
+        var styleType = node.StyleId is not null && stylesById.TryGetValue(node.StyleId, out var info)
+            ? info.Type
+            : node.Type == "Table" ? "table" : "paragraph";
+        return new(
+            node.Id,
+            Clip(node.Location, 300),
+            node.Type,
+            Clip(node.Text, MaxTextCharacters),
+            node.StyleId,
+            style,
+            styleType,
+            node.HasExplicitStyle,
+            DirectFormatting(node),
+            contextualNode.Context);
+    }
+
+    static List<string> DirectFormatting(DocumentNode node)
+    {
+        return node.Formatting
+            .Concat(node.Runs.SelectMany(run => run.Formatting))
+            .Where(value => value.Source == "Direct formatting" &&
+                value.Value is not null && DirectCueProperties.Contains(value.Property))
+            .Select(value => $"{value.Property}: {value.Value}")
+            .Distinct(StringComparer.Ordinal)
+            .Take(8)
+            .ToList();
     }
 
     public static object PromptItems(EvaluationInput input) => new
     {
+        document = input.Document,
         styles = input.Styles,
-        items = input.Items.Select(x => new { x.NodeId, x.Location, x.Type, x.Text, x.AppliedStyle, x.AppliedStyleType, x.Context })
+        items = input.Items.Select(x => new { x.NodeId, x.Location, x.Type, x.Text, x.AppliedStyleId, x.AppliedStyle, x.AppliedStyleType, x.HasExplicitStyle, x.Context })
     };
 
-    static int SerializedSize(List<EvaluationStyleOption> styles, List<EvaluationBlock> items) =>
-        JsonSerializer.Serialize(new EvaluationInput(styles, items, ""), JsonOptions).Length;
+    public static object AssignmentPromptItems(EvaluationInput input) => new
+    {
+        document = input.Document,
+        styles = input.Styles,
+        items = input.Items.Select(item => new
+        {
+            item.NodeId,
+            item.Location,
+            item.Type,
+            item.Text,
+            currentStyleId = item.HasExplicitStyle ? item.AppliedStyleId : null,
+            currentStyle = item.HasExplicitStyle ? item.AppliedStyle : null,
+            inheritedDefaultStyleId = item.HasExplicitStyle ? null : item.AppliedStyleId,
+            inheritedDefaultStyle = item.HasExplicitStyle ? null : item.AppliedStyle,
+            item.AppliedStyleType,
+            item.HasExplicitStyle,
+            directFormatting = item.DirectFormatting,
+            item.Context
+        })
+    };
 
-    static string Clip(string value, int length) => value.Length <= length ? value : value[..length] + "…";
+    static int SerializedSize(
+        List<EvaluationStyleOption> styles,
+        List<EvaluationBlock> items,
+        EvaluationDocumentContext document) =>
+        JsonSerializer.Serialize(new EvaluationInput(styles, items, "", document), JsonOptions).Length;
+
+    static string Clip(string value, int length) =>
+        value.Length <= length ? value : value[..Math.Max(0, length - 3)] + "...";
 }
 
 public sealed class OpenAiStyleEvaluator(HttpClient httpClient, IWebHostEnvironment environment)
